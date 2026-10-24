@@ -38,11 +38,6 @@ push to `master` deploys again:
 
 Or deploy from this folder without Git: `npx wrangler login`, then `npx wrangler pages deploy public --project-name vigil`.
 
-The music is `public/assets/audio/ambient.m4a`, made from the original `bg.mp3` (since removed) with:
-
-```
-ffmpeg -i bg.mp3 -ss 0.85 -af "afade=t=in:d=2.5,afade=t=out:st=663.5:d=5.5" -c:a aac -b:a 80k -movflags +faststart public/assets/audio/ambient.m4a
-```
 
 ## Rebuild from Blender
 
