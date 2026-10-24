@@ -13,12 +13,24 @@ python -m http.server 8765 --directory public
 
 Open http://127.0.0.1:8765 and click **Enter**.
 
-You walk on rails down the centre of the aisle; only the part of your view along the nave moves you.
+Between the pew rows you walk on rails down the centre aisle (only the part of your view along the nave moves
+you); before the first row and past the last you walk where you look.
 
-- Desktop: W forward, S back, mouse to look, Shift to hurry, E to sit in the pew beside you (E again to stand),
-  M to mute the music.
+- Desktop: W forward, S back, mouse to look, Shift to hurry, E to sit on a pew or a stone bench (E again to
+  stand), M to mute the sound.
 - Phone: move the phone to look (gyroscope), hold the top half of the screen to walk on and the bottom half to step
-  back, drag sideways to turn, tap **Sit** beside a pew.
+  back, drag sideways to turn, tap **Sit** beside a pew or bench.
+
+## Publish on GitHub Pages
+
+`.github/workflows/pages.yml` publishes `public/` on every push to `master`. Turn it on once:
+
+1. Open https://github.com/AnonMohak/vigil/settings/pages
+2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
+3. Open the **Actions** tab and run **Deploy to GitHub Pages** (or push any commit to `master`).
+4. When it is green, the site is at https://anonmohak.github.io/vigil/
+
+All asset paths are relative, so the `/vigil/` sub-path works as it is.
 
 The music is `public/assets/audio/ambient.m4a`, made from the original `bg.mp3` (since removed) with:
 
@@ -52,7 +64,13 @@ only to keep moonlight out of the space above the vaults during the bake; it is 
 
 Wear comes from `weather()` in `build_church.py` (chipped edges on stone and wood), drum joints on the piers,
 floor slabs that follow the joints of the floor texture (each one a little out of level, with its own tint),
-and a grime shader in `main.js` (damp near the floor, run-off streaks, stains).
+and a grime shader in `main.js` (damp near the floor, run-off streaks, stains, dust on everything facing up).
+
+The church is half abandoned: pews knocked over, broken or gone, a north-aisle vault bay fallen in with its
+rubble below, one iron corona down across the pews, a torn runner, broken stained glass (a per-window damage mask
+in `glass_damage.png`, read through the glass's second UV map, so the bake and the viewer agree), shards on the
+floor and cobwebs. The viewer adds wind gusts, drifting ground mist and fog banks, candle smoke and a wind sound.
+`ruin.json` tells the viewer which pews cannot be sat on and where the rubble and the hole are.
 
 ## Credits
 

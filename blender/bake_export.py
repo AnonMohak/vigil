@@ -12,10 +12,11 @@ LIGHTMAPS = {
     'Floor': (2048, 1024), 'Walls': 2048, 'Vaults': 2048, 'Piers': 2048, 'Ribs': 2048, 'Pews': 2048,
     'Mouldings': 1024, 'Tracery': 1024, 'AltarStone': 1024, 'Chancel': 1024, 'Bench': 1024, 'EastTracery': 512,
     'RoseTracery': 512, 'Cloth': 512, 'Iron': 1024, 'Linen': 256, 'Gold': 256, 'Wax': 1024, 'DoorIron': 128,
+    'Rubble': 1024, 'Shards': 256,
 }
-UNLIT = ('Glass', 'EastGlass', 'RoseGlass', 'Mortar')
+UNLIT = ('Glass', 'EastGlass', 'RoseGlass', 'Mortar', 'Webs')
 FLOOR_RECT = (-9.5, 9.5, -20.0, 20.0)     # planar lightmap for the floor slabs: u along y, v along x
-LM_SCALE = 0.6        # lightmaps store sRGB(L / LM_SCALE); three.js multiplies back
+LM_K = 0.5            # lightmaps store sRGB(L / (L + LM_K)); main.js decodes them
 
 
 def select_only(ob):
@@ -162,8 +163,10 @@ def lm_pixels(name):
 
 
 def encode(lin):
-    """Linear light -> 8-bit sRGB of (L / LM_SCALE). three.js decodes with an sRGB texture."""
-    x = np.clip(lin / LM_SCALE, 0.0, 1.0)
+    """Linear light -> 8-bit sRGB of L / (L + LM_K): precise in the dark, no clipping in a moonbeam.
+    main.js decodes it with L = LM_K * x / (1 - x)."""
+    lin = np.maximum(lin, 0.0)
+    x = np.clip(lin / (lin + LM_K), 0.0, 1.0)
     s = np.where(x <= 0.0031308, x * 12.92, 1.055 * np.power(x, 1 / 2.4) - 0.055)
     return (np.clip(s, 0, 1) * 255 + 0.5).astype(np.uint8)
 
@@ -209,3 +212,10 @@ def export_glb():
     data = [{'p': [round(p[0], 3), round(p[2], 3), round(-p[1], 3)], 'w': w, 'k': k} for p, w, k in lights]
     with open(os.path.join(WEB, 'candles.json'), 'w') as f:
         json.dump(data, f)
+    # broken pews, rubble and the hole in the vault, in Blender coordinates
+    ruin = json.loads(bpy.context.scene.get('ruin', '{}'))
+    ruin.pop('windows', None)
+    with open(os.path.join(WEB, 'ruin.json'), 'w') as f:
+        json.dump(ruin, f)
+    import shutil
+    shutil.copy(os.path.join(ROOT, 'blender', 'textures', 'glass_damage.png'), os.path.join(WEB, 'glass', 'glass_damage.png'))

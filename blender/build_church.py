@@ -1,9 +1,24 @@
 # build_church.py - procedural gothic church interior (Blender 5.x).
 # Run inside Blender:  exec(open(PATH).read())
 # Units are metres, Z is up, the nave runs along +Y towards the altar.
-import bpy, bmesh, math, random
-from mathutils import Vector
+import bpy, bmesh, math, random, json
+from mathutils import Vector, Euler
 from mathutils import noise as mnoise
+
+# what the ruin did to the building; saved on the scene and exported as ruin.json for the viewer
+RUIN = {'broken_seats': [], 'rubble': [], 'hole': None, 'windows': []}
+
+# the collapsed north-aisle vault bay
+HOLE_BAY = 2
+HOLE_C = (-7.45, -7.5)
+
+
+def in_hole(x, y, grow=1.0):
+    """Inside the jagged hole in the north aisle vault (`grow` > 1 for the roof above it)."""
+    u, v = (x - HOLE_C[0]) / 2.05, (y - HOLE_C[1]) / 2.5
+    a = math.atan2(v, u)
+    edge = (0.62 + 0.16 * mnoise.noise(Vector((math.cos(a) * 1.7, math.sin(a) * 1.7, 0.37)))) * grow
+    return math.hypot(u, v * 0.9) < edge
 
 SQ3 = math.sqrt(3.0)
 
@@ -106,6 +121,18 @@ class MB:
             for l in f.loops:
                 l[layer] = (*rgb, 1.0)
 
+    def rotate_since(self, mark, pivot, euler, move=(0.0, 0.0, 0.0)):
+        """Rotate the verts made since mark about pivot, then shift them."""
+        m = Euler(euler).to_matrix()
+        p, d = Vector(pivot), Vector(move)
+        for v in self.verts_since(mark):
+            v.co = p + m @ (v.co - p) + d
+
+    def cut(self, pred):
+        """Delete faces whose centre satisfies pred(Vector)."""
+        dead = [f for f in self.bm.faces if pred(f.calc_center_median())]
+        bmesh.ops.delete(self.bm, geom=dead, context='FACES')
+
     def transform_since(self, mark, cx, cy, angle, dx=0.0, dy=0.0):
         """Rotate the verts made since mark about (cx, cy) and shift them."""
         c, s = math.cos(angle), math.sin(angle)
@@ -155,6 +182,8 @@ def prism(mb, poly, axis, a0, a1):
     poly = clean(poly)
     if axis == 'x':
         P = lambda u, v, a: (a, u, v)
+    elif axis == 'z':                    # poly in (x, y), extruded from z = a0 to a1
+        P = lambda u, v, a: (u, v, a)
     else:
         P = lambda u, v, a: (u, a, v)
     f = mb.verts([P(u, v, a0) for u, v in poly])
@@ -185,6 +214,76 @@ def lathe(mb, cx, cy, prof, seg=16, rot=0.0):
     mb.face(rings[-1])
 
 
+def dented_lathe(mb, cx, cy, prof, rnd, seg=14, dents=1, depth=0.25, sag=0.0):
+    """lathe() with knocks: the radius caves in around a few angles and the top rings droop there."""
+    hits = [(rnd.uniform(0, 2 * math.pi), depth * rnd.uniform(0.5, 1.0)) for _ in range(dents)]
+
+    def knock(a):
+        k = 0.0
+        for a0, d in hits:
+            da = math.atan2(math.sin(a - a0), math.cos(a - a0))
+            k = max(k, d * math.exp(-(da / 0.55) ** 2))
+        return k
+
+    rings = []
+    for i, (r, z) in enumerate(prof):
+        f = i / max(1, len(prof) - 1)          # outer / upper rings take the blow
+        ring = []
+        for k in range(seg):
+            a = 2 * math.pi * k / seg
+            kk = knock(a) * f
+            ring.append((cx + r * (1 - kk) * math.cos(a), cy + r * (1 - kk) * math.sin(a), z - sag * kk / max(depth, 1e-6)))
+        rings.append(mb.verts(ring))
+    for i in range(len(rings) - 1):
+        for k in range(seg):
+            k2 = (k + 1) % seg
+            mb.face([rings[i][k], rings[i][k2], rings[i + 1][k2], rings[i + 1][k]])
+    mb.face(rings[0][::-1])
+    mb.face(rings[-1])
+
+
+def pan(mb, x, y, z, r, rnd, h=0.022, dents=1):
+    """A battered iron drip pan whose floor is at z, with a socket rising to z + h."""
+    dented_lathe(mb, x, y, [(r * 0.35, z - 0.004), (r * 0.8, z), (r, z + h * 0.6), (r * 1.06, z + h * 0.75)],
+                 rnd, dents=dents, depth=0.22, sag=0.012)
+    cyl(mb, x, y, z, z + h, r * 0.42, seg=8)
+
+
+def tripod(mb, x, y, rnd, hub=0.32, foot=0.34, r=0.017):
+    """Three forged legs ending in scroll curls and ball feet."""
+    rot = rnd.uniform(0, 2 * math.pi)
+    for k in range(3):
+        a = rot + k * 2 * math.pi / 3 + rnd.uniform(-0.15, 0.15)
+        ca, sa = math.cos(a), math.sin(a)
+        fr = foot * rnd.uniform(0.92, 1.05)
+        pts = [(x + ca * fr * t, y + sa * fr * t, 0.035 + (hub - 0.035) * (1 - t) ** 1.7) for t in (i / 8 for i in range(9))]
+        for j in range(1, 9):                   # the scroll: out, up and back over
+            ang = -math.pi / 2 + j * (1.5 * math.pi / 8)
+            rr = fr + 0.03 * math.cos(ang)
+            pts.append((x + ca * rr, y + sa * rr, 0.065 + 0.03 * math.sin(ang)))
+        tube(mb, pts, r, r * 1.35, seg=6)
+        lathe(mb, x + ca * fr, y + sa * fr, [(0.004, 0.0), (0.022, 0.012), (0.02, 0.026), (0.004, 0.036)], seg=6)
+    dented_lathe(mb, x, y, [(0.045, hub - 0.04), (0.06, hub - 0.01), (0.05, hub + 0.03), (0.03, hub + 0.05)], rnd, seg=8)
+
+
+def forged_stem(mb, x0, y0, z0, x1, y1, z1, rnd, r=0.019, knops=(), knop_r=0.042):
+    """A twisted square bar from (x0, y0, z0) to (x1, y1, z1), a little bowed, with forged knops."""
+    bow = (rnd.uniform(-0.012, 0.012), rnd.uniform(-0.012, 0.012))
+    n = 18
+    pts = []
+    for i in range(n + 1):
+        t = i / n
+        b = math.sin(math.pi * t)
+        pts.append((x0 + (x1 - x0) * t + bow[0] * b, y0 + (y1 - y0) * t + bow[1] * b, z0 + (z1 - z0) * t))
+    tube(mb, pts, r, r, seg=4, twist=7.0)
+    for zk in knops:
+        t = (zk - z0) / (z1 - z0)
+        b = math.sin(math.pi * t)
+        cx, cy = x0 + (x1 - x0) * t + bow[0] * b, y0 + (y1 - y0) * t + bow[1] * b
+        dented_lathe(mb, cx, cy, [(r * 1.1, zk - 0.035), (knop_r, zk - 0.012), (knop_r, zk + 0.012), (r * 1.1, zk + 0.035)],
+                     rnd, seg=8, depth=0.18)
+
+
 def cyl(mb, cx, cy, z0, z1, r, seg=12, rot=0.0, drum=None, rnd=None):
     """Cylinder; with `drum` it is built of stone drums with sunk joints and slightly uneven radii."""
     if not drum:
@@ -201,8 +300,8 @@ def cyl(mb, cx, cy, z0, z1, r, seg=12, rot=0.0, drum=None, rnd=None):
     lathe(mb, cx, cy, prof, seg, rot)
 
 
-def tube(mb, pts, r, depth=None, seg=8, ref=None, closed=False):
-    """Sweep an ellipse (half-width r, half-depth `depth` along ref) along pts."""
+def tube(mb, pts, r, depth=None, seg=8, ref=None, closed=False, twist=0.0):
+    """Sweep an ellipse (half-width r, half-depth `depth` along ref) along pts; `twist` in radians per metre."""
     pts = [Vector(p) for p in pts]
     depth = r if depth is None else depth
     n = len(pts)
@@ -220,11 +319,19 @@ def tube(mb, pts, r, depth=None, seg=8, ref=None, closed=False):
     ref = Vector(ref) if ref is not None else (Vector((0, 0, 1)) if abs(T[0].z) < 0.9 else Vector((1, 0, 0)))
     N = (ref - T[0] * ref.dot(T[0])).normalized()
     rings = []
+    s = 0.0
     for i in range(n):
         N = (N - T[i] * N.dot(T[i])).normalized()
         B = T[i].cross(N)
-        rings.append(mb.verts([pts[i] + N * (math.cos(2 * math.pi * k / seg) * depth)
-                               + B * (math.sin(2 * math.pi * k / seg) * r) for k in range(seg)]))
+        if i:
+            s += (pts[i] - pts[i - 1]).length
+        Nt, Bt = N, B
+        if twist:
+            a = twist * s
+            Nt = N * math.cos(a) + B * math.sin(a)
+            Bt = T[i].cross(Nt)
+        rings.append(mb.verts([pts[i] + Nt * (math.cos(2 * math.pi * k / seg) * depth)
+                               + Bt * (math.sin(2 * math.pi * k / seg) * r) for k in range(seg)]))
     last = n if closed else n - 1
     for i in range(last):
         i2 = (i + 1) % n
@@ -378,6 +485,12 @@ def build_vaults(coll):
             transverse(xa, xb, y, A_SPRING, A_RISE, 0.11, 16)
     # ridge ribs
     tube(ribs, [(0, Y0, V_SPRING + V_RISE - 0.1), (0, Y1, V_SPRING + V_RISE - 0.1)], 0.12, 0.14)
+    # one north-aisle bay has fallen in
+    yb0 = Y0 + HOLE_BAY * BAY
+    hole = lambda c: c.x < -WALL_OUT and yb0 < c.y < yb0 + BAY and in_hole(c.x, c.y)
+    mb.cut(lambda c: c.z > A_SPRING + 0.3 and hole(c))
+    ribs.cut(lambda c: c.z > A_SPRING + 0.6 and hole(c))
+    RUIN['hole'] = {'x': HOLE_C[0], 'y': HOLE_C[1], 'z': A_SPRING + A_RISE - 0.2, 'rx': 2.05 * 0.66, 'ry': 2.5 * 0.66}
     make_obj('Vaults', mb, 'Stone', coll, closed=False, uv_scale=2.5, smooth=50)
     make_obj('Ribs', ribs, 'StoneTrim', coll, closed=False, uv_scale=1.5, smooth=70)
 
@@ -490,10 +603,22 @@ def build_roof(coll):
     """Bake-only roofs: keep moonlight out of the space above the vaults. Not exported."""
     mb = MB()
     box(mb, -WALL_OUT, WALL_OUT, Y0 - END_T, Y1 + END_T, TOP, TOP + 0.3)
+    # lean-to aisle roofs in tiles, so the north one can be holed above the fallen vault
+    nx, step = 10, 0.5
     for s in (-1, 1):
-        lean = [(s * WALL_OUT, TRIF_TOP), (s * (AISLE + OUTER_T), AISLE_TOP),
-                (s * (AISLE + OUTER_T), AISLE_TOP + 0.3), (s * WALL_OUT, TRIF_TOP + 0.3)]
-        prism(mb, lean, 'y', Y0 - END_T, Y1 + END_T)
+        y = Y0 - END_T
+        while y < Y1 + END_T - 1e-6:
+            y1 = min(y + step, Y1 + END_T)
+            for i in range(nx):
+                xa = WALL_OUT + (AISLE + OUTER_T - WALL_OUT) * i / nx
+                xb = WALL_OUT + (AISLE + OUTER_T - WALL_OUT) * (i + 1) / nx
+                if s < 0 and in_hole(-(xa + xb) / 2 + 0.8, (y + y1) / 2, grow=1.5):
+                    continue
+                za = TRIF_TOP + (AISLE_TOP - TRIF_TOP) * (xa - WALL_OUT) / (AISLE + OUTER_T - WALL_OUT)
+                zb = TRIF_TOP + (AISLE_TOP - TRIF_TOP) * (xb - WALL_OUT) / (AISLE + OUTER_T - WALL_OUT)
+                tile = [(s * xa, za), (s * xb, zb), (s * xb, zb + 0.3), (s * xa, za + 0.3)]
+                prism(mb, tile, 'y', y, y1)
+            y = y1
     make_obj('Roof', mb, 'Roof', coll, smooth=0)
 
 
@@ -595,22 +720,35 @@ def plane_map(axis, a):
     return (lambda u, v: (a, u, v)) if axis == 'x' else (lambda u, v: (u, a, v))
 
 
-def glass_face(mb, poly, axis, a, uv_of):
+DMG_COLS, DMG_ROWS = 8, 5           # damage-mask atlas: one cell per window
+
+
+def dmg_rect(i):
+    c, r = i % DMG_COLS, i // DMG_COLS
+    return (c / DMG_COLS, r / DMG_ROWS, (c + 1) / DMG_COLS, (r + 1) / DMG_ROWS)
+
+
+def glass_face(mb, poly, axis, a, uv_of, dmg_of=None):
     P = plane_map(axis, a)
-    f = mb.face(mb.verts([P(u, v) for u, v in clean(poly)]))
-    uv = mb.bm.loops.layers.uv.verify()
-    for l, (u, v) in zip(f.loops, clean(poly)):
+    poly = clean(poly)
+    f = mb.face(mb.verts([P(u, v) for u, v in poly]))
+    uv = mb.bm.loops.layers.uv.get('UVMap') or mb.bm.loops.layers.uv.new('UVMap')
+    dmg = mb.bm.loops.layers.uv.get('Damage') or mb.bm.loops.layers.uv.new('Damage')
+    for l, (u, v) in zip(f.loops, poly):
         l[uv].uv = uv_of(u, v)
+        l[dmg].uv = dmg_of(u, v) if dmg_of else (0.0, 0.0)
     return f
 
 
-def window(stone, glass, axis, a, out, c, h, sill, spring, levels, uv_rect):
+def window(stone, glass, axis, a, out, c, h, sill, spring, levels, uv_rect, dmg=None):
     """Lancet window: glass pane plus stone tracery. `out` is +-1, the outward side."""
     apex = spring + h * SQ3
     outline = [(c - h, sill), (c + h, sill)] + list(reversed(arch(c, h, spring, n=16)))
     u0, v0, u1, v1 = uv_rect
+    d0, e0, d1, e1 = dmg or (0, 0, 0, 0)
     glass_face(glass, outline, axis, a + out * 0.12,
-               lambda u, v: (u0 + (u1 - u0) * (u - c + h) / (2 * h), v0 + (v1 - v0) * (v - sill) / (apex - sill)))
+               lambda u, v: (u0 + (u1 - u0) * (u - c + h) / (2 * h), v0 + (v1 - v0) * (v - sill) / (apex - sill)),
+               lambda u, v: (d0 + (d1 - d0) * (u - c + h) / (2 * h), e0 + (e1 - e0) * (v - sill) / (apex - sill)))
     P = plane_map(axis, a)
     nrm = (1, 0, 0) if axis == 'x' else (0, 1, 0)
     rim = [(c - h, sill)] + arch(c, h, spring, n=16) + [(c + h, sill)]
@@ -638,11 +776,13 @@ def window(stone, glass, axis, a, out, c, h, sill, spring, levels, uv_rect):
     tracery(c, h, levels)
 
 
-def rose(stone, glass, y, out):
+def rose(stone, glass, y, out, dmg):
     P = lambda u, v: (u, y, v)
     nrm = (0, 1, 0)
     disk = [(R_R * math.cos(t * math.pi / 36), R_Z + R_R * math.sin(t * math.pi / 36)) for t in range(72)]
-    glass_face(glass, disk, 'y', y + out * 0.12, lambda u, v: (0.5 + u / (2 * R_R), 0.5 + (v - R_Z) / (2 * R_R)))
+    d0, e0, d1, e1 = dmg
+    glass_face(glass, disk, 'y', y + out * 0.12, lambda u, v: (0.5 + u / (2 * R_R), 0.5 + (v - R_Z) / (2 * R_R)),
+               lambda u, v: (d0 + (d1 - d0) * (0.5 + u / (2 * R_R)), e0 + (e1 - e0) * (0.5 + (v - R_Z) / (2 * R_R))))
 
     def circle(cx, cz, r, rr, depth, n=48):
         tube(stone, [P(cx + r * math.cos(t * 2 * math.pi / n), cz + r * math.sin(t * 2 * math.pi / n)) for t in range(n)],
@@ -668,54 +808,144 @@ def rose(stone, glass, y, out):
         tube(stone, pts, 0.045, 0.12, seg=6, ref=nrm)
 
 
+GLASS_BITS = [(0.08, 0.2, 0.62), (0.62, 0.05, 0.07), (0.88, 0.58, 0.12), (0.12, 0.42, 0.2), (0.8, 0.8, 0.7)]
+
+
+def shard(mb, rnd, x, y, z):
+    """A fallen sliver of coloured glass lying flat."""
+    m = mb.mark()
+    s = rnd.uniform(0.015, 0.07)
+    a = rnd.uniform(0, 2 * math.pi)
+    pts = [(x + s * math.cos(a + d) * rnd.uniform(0.5, 1.2), y + s * math.sin(a + d) * rnd.uniform(0.5, 1.2), z)
+           for d in (0, 2.1, 4.0)]
+    f = mb.face(mb.verts(pts))
+    if f and (Vector(pts[1]) - Vector(pts[0])).cross(Vector(pts[2]) - Vector(pts[0])).z < 0:
+        f.normal_flip()
+    mb.paint(m, rnd.choice(GLASS_BITS))
+
+
 def build_windows(coll):
-    stone = MB()
-    glass = MB()
+    rnd = random.Random(19)
+    stone, glass, bits = MB(), MB(), MB()
+    cell = 0
+
+    def damage(kind, level):
+        nonlocal cell
+        RUIN['windows'].append({'cell': cell, 'level': level, 'kind': kind})
+        cell += 1
+        return dmg_rect(cell - 1)
+
     for i, (y0, y1, yc) in enumerate(bays()):
         for s in (-1, 1):
             col = (i + (s > 0)) % 2
-            window(stone, glass, 'x', s * PIER_X, s, yc, CL_H, CL_SILL, CL_SPRING, 1, (col * 0.25, 0, col * 0.25 + 0.25, 1))
+            lvl = rnd.choice((0.0, 0.0, 0.12, 0.25, 0.45))
+            window(stone, glass, 'x', s * PIER_X, s, yc, CL_H, CL_SILL, CL_SPRING, 1, (col * 0.25, 0, col * 0.25 + 0.25, 1),
+                   damage('lancet', lvl))
             col = 2 + (i + (s < 0)) % 2
+            # the north side took the weather (and the stones) worst; the bay under the fallen vault is nearly bare
+            lvl = 0.85 if (s < 0 and i == HOLE_BAY) else rnd.choice((0.1, 0.3, 0.5, 0.75) if s < 0 else (0.0, 0.0, 0.15, 0.35))
             window(stone, glass, 'x', s * (AISLE + OUTER_T / 2), s, yc, AW_H, AW_SILL, AW_SPRING, 0,
-                   (col * 0.25, 0, col * 0.25 + 0.25, 1))
+                   (col * 0.25, 0, col * 0.25 + 0.25, 1), damage('lancet', lvl))
+            for _ in range(int(lvl * 70)):            # what fell in lies on the sill, the bench and the floor
+                d = abs(rnd.gauss(0, 0.9))
+                x = s * (AISLE + 0.3 - d)
+                yy = yc + rnd.gauss(0, 0.6)
+                z = AW_SILL + 0.002 if abs(x) > AISLE + 0.05 else 0.442 if abs(x) > AISLE - 0.42 else 0.004
+                shard(bits, rnd, x, yy, z)
     make_obj('Tracery', stone, 'StoneTrim', coll, closed=False, uv_scale=1.5, smooth=70)
     make_obj('Glass', glass, 'Glass', coll, closed=False, smooth=0, uv_fn=lambda bm: None)
 
     stone, glass = MB(), MB()
-    window(stone, glass, 'y', Y1 + END_T / 2, 1, 0.0, E_H, E_SILL, E_SPRING, 2, (0, 0, 1, 1))
+    window(stone, glass, 'y', Y1 + END_T / 2, 1, 0.0, E_H, E_SILL, E_SPRING, 2, (0, 0, 1, 1), damage('east', 0.1))
     make_obj('EastTracery', stone, 'StoneTrim', coll, closed=False, uv_scale=1.5, smooth=70)
     make_obj('EastGlass', glass, 'GlassEast', coll, closed=False, smooth=0, uv_fn=lambda bm: None)
 
     stone, glass = MB(), MB()
-    rose(stone, glass, Y0 - END_T / 2, -1)
+    rose(stone, glass, Y0 - END_T / 2, -1, damage('rose', 0.2))
+    for _ in range(18):
+        shard(bits, rnd, rnd.uniform(-2.5, 2.5), Y0 + abs(rnd.gauss(0, 1.0)) + 0.1, 0.004)
     make_obj('RoseTracery', stone, 'StoneTrim', coll, closed=False, uv_scale=1.5, smooth=70)
     make_obj('RoseGlass', glass, 'GlassRose', coll, closed=False, smooth=0, uv_fn=lambda bm: None)
+    make_obj('Shards', bits, 'Shard', coll, closed=False, smooth=0, uv_scale=0.5)
 
 
 # ---------------------------------------------------------------- furnishings
 PEW_ROWS = [-15.6 + k * 1.0 for k in range(25)]
 
 
+def web(mb, a, b, c):
+    """A cobweb strung across a corner: a is the corner, b and c lie along its two edges."""
+    f = mb.face(mb.verts([a, b, c]))
+    uv = mb.bm.loops.layers.uv.get('UVMap') or mb.bm.loops.layers.uv.new('UVMap')
+    for l, t in zip(f.loops, ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))):
+        l[uv].uv = t
+
+
+def ragged_strip(mb, rnd, x0, x1, y0, y1, z0, z1, fray=0.04):
+    """A worn strip of cloth with frayed sides and torn ends."""
+    n = max(3, int((y1 - y0) / 0.12))
+    m = 7
+    left = [(x0 + rnd.uniform(-0.01, fray), y0 + (y1 - y0) * i / n) for i in range(n + 1)]
+    top = [(x0 + (x1 - x0) * i / m, y1 - rnd.uniform(0, 0.1)) for i in range(1, m)]
+    right = [(x1 - rnd.uniform(-0.01, fray), y1 - (y1 - y0) * i / n) for i in range(n + 1)]
+    bottom = [(x1 - (x1 - x0) * i / m, y0 + rnd.uniform(0, 0.1)) for i in range(1, m)]
+    prism(mb, left + top + right + bottom, 'z', z0, z1)
+
+
 def build_furniture(coll):
-    wood = MB()
+    wood, webs = MB(), MB()
     rnd = random.Random(11)
-    for y in PEW_ROWS:
+    ruin = random.Random(77)
+    for k, y in enumerate(PEW_ROWS):
         for s in (-1, 1):
             xa, xb = sorted((s * 1.0, s * 3.9))
-            m = wood.mark()
-            box(wood, xa + 0.05, xb - 0.05, y + 0.05, y + 0.48, 0.42, 0.47)        # seat
-            box(wood, xa + 0.05, xb - 0.05, y, y + 0.05, 0.47, 0.97)               # back
-            box(wood, xa + 0.05, xb - 0.05, y - 0.03, y + 0.08, 0.97, 1.01)        # top rail
-            box(wood, xa + 0.05, xb - 0.05, y - 0.18, y, 0.76, 0.79)               # book shelf
-            box(wood, xa + 0.05, xb - 0.05, y - 0.5, y - 0.36, 0.1, 0.17)          # kneeler
-            box(wood, xa + 0.05, xb - 0.05, y + 0.02, y + 0.06, 0.05, 0.42)        # modesty board
+            r = ruin.random()
+            crushed = s < 0 and -3.9 < y < -0.9          # under the fallen corona
+            state = ('broken' if crushed else 'gone' if r < 0.04 else 'fallen' if r < 0.1
+                     else 'broken' if r < 0.24 else 'shifted' if r < 0.5 else 'ok')
+            if state != 'ok' and state != 'shifted':
+                RUIN['broken_seats'].append(f'{k}:{s}')
+            if state == 'gone':
+                continue
+            m, mw = wood.mark(), webs.mark()
+            gx = ruin.uniform(xa + 0.8, xb - 0.8)                  # where a broken pew gave way
+            gw = ruin.uniform(0.35, 0.8)
+            spans = [(xa + 0.05, gx - gw / 2), (gx + gw / 2, xb - 0.05)] if state == 'broken' else [(xa + 0.05, xb - 0.05)]
+            for a, b in spans:
+                box(wood, a, b, y, y + 0.05, 0.47, 0.97)               # back
+                box(wood, a, b, y - 0.03, y + 0.08, 0.97, 1.01)        # top rail
+                box(wood, a, b, y - 0.18, y, 0.76, 0.79)               # book shelf
+            box(wood, xa + 0.05, xb - 0.05, y + 0.02, y + 0.06, 0.05, 0.42)  # modesty board
+            if state == 'broken':
+                # the seat snapped: one half still on its end, the other dropped to the floor
+                for a, b, pivot, sgn in ((xa + 0.05, gx, xa + 0.06, 1), (gx, xb - 0.05, xb - 0.06, -1)):
+                    ms = wood.mark()
+                    box(wood, a, b, y + 0.05, y + 0.48, 0.42, 0.47)
+                    if (sgn > 0) == (ruin.random() < 0.5):
+                        drop = math.asin(min(0.95, 0.38 / max(0.3, abs(b - a))))
+                        wood.rotate_since(ms, (pivot, y, 0.445), (0, sgn * drop, 0))
+            else:
+                box(wood, xa + 0.05, xb - 0.05, y + 0.05, y + 0.48, 0.42, 0.47)    # seat
+                box(wood, xa + 0.05, xb - 0.05, y - 0.5, y - 0.36, 0.1, 0.17)      # kneeler
             end = ([(y - 0.2, 0.0), (y + 0.5, 0.0), (y + 0.5, 0.9)]
                    + list(reversed(arch(y + 0.15, 0.35, 0.9, rise=0.32, n=8))))
             for xe in (xa, xb - 0.06):
                 prism(wood, end, 'x', xe, xe + 0.06)
-            # pews are never quite in line
-            wood.transform_since(m, (xa + xb) / 2, y, math.radians(rnd.uniform(-0.7, 0.7)),
-                                 rnd.uniform(-0.015, 0.015), rnd.uniform(-0.03, 0.03))
+            if state != 'fallen' and ruin.random() < 0.4:
+                # a cobweb in the corner between an end and the back
+                left = ruin.random() < 0.5
+                xe, d = (xa + 0.06, 1) if left else (xb - 0.06, -1)
+                web(webs, (xe, y + 0.05, 0.6), (xe + d * ruin.uniform(0.25, 0.4), y + 0.05, 0.965),
+                    (xe, y + ruin.uniform(0.3, 0.45), 0.9))
+            if state == 'fallen':
+                # tipped over backwards onto the row behind
+                wood.rotate_since(m, ((xa + xb) / 2, y - 0.2, 0.0), (math.radians(ruin.uniform(36, 46)), 0,
+                                                                    math.radians(ruin.uniform(-6, 6))))
+            yaw = ruin.uniform(-6, 6) if state in ('shifted', 'broken') else rnd.uniform(-0.7, 0.7)
+            off = (ruin.uniform(-0.06, 0.06), ruin.uniform(-0.1, 0.1)) if state == 'shifted' else \
+                  (rnd.uniform(-0.015, 0.015), rnd.uniform(-0.03, 0.03))
+            for mb_, mk in ((wood, m), (webs, mw)):
+                mb_.transform_since(mk, (xa + xb) / 2, y, math.radians(yaw), *off)
     # west doors
     door = [(-D_H, 0.0), (D_H, 0.0)] + list(reversed(arch(0.0, D_H, D_SPRING, n=16)))
     prism(wood, door, 'y', Y0 - 0.55, Y0 - 0.45)
@@ -736,8 +966,37 @@ def build_furniture(coll):
     box(iron, -0.03, 0.03, Y0 - 0.45, Y0 - 0.4, 0.0, D_SPRING + D_H * SQ3 - 0.1)
     make_obj('DoorIron', iron, 'Iron', coll, smooth=0)
 
+    # more cobwebs: in the corners of the aisle windows, where the benches meet the wall shafts, on the candelabra
+    for _, _, yc in bays():
+        for s in (-1, 1):
+            if ruin.random() < 0.7:
+                for d in (-1, 1):
+                    x = s * (AISLE + 0.12)
+                    web(webs, (x, yc + d * AW_H, AW_SILL), (x, yc + d * (AW_H - ruin.uniform(0.25, 0.45)), AW_SILL),
+                        (x, yc + d * AW_H, AW_SILL + ruin.uniform(0.3, 0.6)))
+    for i in range(NBAY + 1):
+        for s in (-1, 1):
+            if ruin.random() < 0.5:
+                y, d = Y0 + i * BAY, ruin.choice((-1, 1))
+                x = s * (AISLE - 0.1)
+                web(webs, (x, y + d * 0.24, 0.44), (x, y + d * ruin.uniform(0.5, 0.75), 0.44),
+                    (x, y + d * 0.24, ruin.uniform(0.75, 1.0)))
+    for s in (-1, 1):
+        cx, cy = s * 1.65, 10.5
+        web(webs, (cx + s * 0.03, cy, 1.6), (cx + s * 0.4, cy, 1.6), (cx + s * 0.03, cy, 1.3))
+    make_obj('Webs', webs, 'Web', coll, closed=False, smooth=0, uv_fn=lambda bm: None)
+
     cloth = MB()
-    box(cloth, -0.75, 0.75, Y0 + 0.6, CHANCEL_Y, 0.0, 0.012)                       # runner
+    # the runner is worn through and torn into pieces, one of them dragged askew
+    tr = random.Random(5)
+    y = Y0 + 0.6
+    while y < CHANCEL_Y - 0.4:
+        yb = min(CHANCEL_Y, y + tr.uniform(1.4, 4.5))
+        m = cloth.mark()
+        ragged_strip(cloth, tr, -0.75, 0.75, y, yb, 0.0, 0.012)
+        if tr.random() < 0.3:
+            cloth.transform_since(m, 0.0, (y + yb) / 2, math.radians(tr.uniform(-5, 5)), tr.uniform(-0.12, 0.12), 0.0)
+        y = yb + tr.uniform(0.15, 0.9)
     box(cloth, -1.35, 1.35, 17.44, 17.47, CHANCEL_H + 0.12, CHANCEL_H + 1.06)       # frontal
     make_obj('Cloth', cloth, 'Cloth', coll, smooth=0)
     linen = MB()
@@ -770,6 +1029,60 @@ def build_furniture(coll):
                            (0.66, 1.1)], seg=8, rot=math.pi / 8)
     make_obj('AltarStone', st, 'StoneTrim', coll, uv_scale=1.5, smooth=40,
              wear=dict(seed=4, step=0.1, chip=0.022, freq=3.5, thresh=0.2))
+
+
+# ---------------------------------------------------------------- the fallen vault
+def chunk(mb, pos, size, rot):
+    m = mb.mark()
+    sx, sy, sz = size
+    box(mb, -sx / 2, sx / 2, -sy / 2, sy / 2, -sz / 2, sz / 2)
+    mb.rotate_since(m, (0, 0, 0), rot, pos)
+
+
+def build_rubble(coll):
+    rnd = random.Random(41)
+    mb = MB()
+    cx, cy = HOLE_C
+    # a low heap of grit and broken mortar, then the stones on it
+    dented_lathe(mb, cx, cy, [(1.7, 0.0), (1.35, 0.1), (0.85, 0.24), (0.3, 0.34), (0.05, 0.36)], rnd, seg=18,
+                 dents=4, depth=0.35)
+
+    def mound(x, y):
+        r = math.hypot((x - cx) / 1.0, (y - cy) / 1.2)
+        return 0.38 * max(0.0, 1 - r / 1.7) ** 1.3
+
+    for _ in range(85):
+        r, a = 1.9 * math.sqrt(rnd.random()), rnd.uniform(0, 2 * math.pi)
+        x = max(-AISLE + 0.15, cx + r * math.cos(a))
+        y = cy + r * math.sin(a) * 1.2
+        k = 1.0 - 0.45 * r / 1.9
+        size = (rnd.uniform(0.12, 0.5) * k, rnd.uniform(0.1, 0.36) * k, rnd.uniform(0.07, 0.24) * k)
+        chunk(mb, (x, y, mound(x, y) + size[2] * 0.3), size,
+              (rnd.uniform(-0.5, 0.5), rnd.uniform(-0.5, 0.5), rnd.uniform(0, math.pi)))
+    # pieces of the ribs and the boss that held the vault together
+    for _ in range(4):
+        m = mb.mark()
+        R, a0 = 1.3, rnd.uniform(0, 1)
+        tube(mb, [(R * math.cos(a0 + t * 0.09), 0.0, R * math.sin(a0 + t * 0.09)) for t in range(7)], 0.11, 0.16, seg=6)
+        mb.rotate_since(m, (0, 0, 0), (rnd.uniform(1.2, 1.9), 0, rnd.uniform(0, 3.14)),
+                        (cx + rnd.uniform(-0.9, 0.9) - R * 0.7, cy + rnd.uniform(-1.0, 1.0), 0.15 - R * 0.6))
+    m = mb.mark()
+    lathe(mb, 0, 0, [(0.25, -0.1), (0.35, 0.0), (0.2, 0.15)], seg=12)
+    mb.rotate_since(m, (0, 0, 0), (1.9, 0.3, 0), (cx + 0.5, cy - 0.4, 0.42))
+    RUIN['rubble'].append([cx, cy, 1.75])
+    # loose stones that have dropped from the arches and the walls over the years
+    spots = [(s * 9.0, Y0 + rnd.uniform(0.5, 39.5)) for s in (-1, 1) for _ in range(14)]
+    spots += [(s * rnd.uniform(4.0, 6.0), Y0 + i * BAY + rnd.uniform(-1.0, 1.0)) for s in (-1, 1) for i in range(1, NBAY)]
+    spots += [(rnd.uniform(-8, 8), Y0 + rnd.uniform(0.3, 1.5)) for _ in range(6)]
+    for x, y in spots:
+        if abs(x) < 1.0 or (abs(x) < NAVE and y > CHANCEL_Y - 0.3):
+            continue
+        for _ in range(rnd.randint(1, 3)):
+            size = (rnd.uniform(0.05, 0.2), rnd.uniform(0.04, 0.16), rnd.uniform(0.03, 0.1))
+            chunk(mb, (x + rnd.uniform(-0.25, 0.25), y + rnd.uniform(-0.25, 0.25), size[2] * 0.4), size,
+                  (rnd.uniform(-0.3, 0.3), rnd.uniform(-0.3, 0.3), rnd.uniform(0, math.pi)))
+    make_obj('Rubble', mb, 'StoneTrim', coll, closed=False, uv_scale=1.5, smooth=35,
+             wear=dict(seed=8, step=0.12, chip=0.03, freq=4.5, thresh=0.1, bump=0.006))
 
 
 # ---------------------------------------------------------------- candles
@@ -850,42 +1163,82 @@ def build_candles(coll):
         state, h = burn(rnd, 0.12, 0.36, p_stub=0.2) if k != 4 else ('lit', 0.05)
         add(candlestick(gold, wax, iron, x, 18.1, ch + 1.115, hh, h, rnd, state), 3.2, 'altar')
     # two great standing candelabra before the chancel steps
+    rust = random.Random(31)        # the iron's own dice, so the candles stay where they were baked
     for s in (-1, 1):
         cx, cy = s * 1.65, 10.5
-        lathe(iron, cx, cy, [(0.32, 0.0), (0.32, 0.04), (0.1, 0.12), (0.04, 0.25)], seg=12)
-        cyl(iron, cx, cy, 0.0, 1.62, 0.028, seg=8)
-        tube(iron, [(cx - 0.55, cy, 1.62), (cx + 0.55, cy, 1.62)], 0.022, seg=6)
+        # old forged candelabrum: tripod feet, a twisted stem, a drooping bar with scrolled ends
+        tripod(iron, cx, cy, rust)
+        forged_stem(iron, cx + rust.uniform(-0.025, 0.025), cy + rust.uniform(-0.025, 0.025), 0.3, cx, cy, 1.6, rust,
+                    knops=(0.62, 1.1) if s < 0 else (0.62, 1.1, 1.42))
+        zbar = lambda u: 1.62 - 0.022 * (u / 0.6) ** 2
+        tube(iron, [(cx + u, cy, zbar(u)) for u in (-0.6 + 1.2 * i / 24 for i in range(25))], 0.017, 0.012, seg=4,
+             ref=(0, 0, 1))
+        for end in (-1, 1):
+            ex, ez = cx + end * 0.6, zbar(0.6)
+            if s > 0 and end > 0:
+                # this scroll snapped off long ago: a ragged stump
+                dented_lathe(iron, ex, cy, [(0.012, ez - 0.02), (0.021, ez - 0.006), (0.018, ez + 0.012), (0.008, ez + 0.02)],
+                             rust, seg=6, depth=0.4)
+                continue
+            curl = [(ex + end * 0.035 * math.cos(a), cy, ez - 0.035 + 0.035 * math.sin(a))
+                    for a in (math.pi / 2 - j * (1.6 * math.pi / 10) for j in range(11))]
+            tube(iron, [(ex, cy, ez)] + curl, 0.012, 0.009, seg=4, ref=(0, 1, 0))
         for k, dx in enumerate((-0.55, -0.27, 0.0, 0.27, 0.55)):
             top = 1.62 + 0.18 * (1 - abs(dx) / 0.55) + 0.08
-            cyl(iron, cx + dx, cy, 1.6, top, 0.018, seg=6)
-            lathe(iron, cx + dx, cy, [(0.06, top), (0.06, top + 0.02), (0.03, top + 0.04)], seg=10)
+            bend = 0.045 if (s < 0 and k == 1) else rust.uniform(-0.01, 0.01)    # one arm knocked crooked
+            tube(iron, [(cx + dx, cy, zbar(dx)), (cx + dx + bend, cy + rust.uniform(-0.01, 0.01), (zbar(dx) + top) / 2),
+                        (cx + dx, cy, top)], 0.011, seg=6)
+            pan(iron, cx + dx, cy, top, 0.06, rust, dents=1 + (k % 2))
             state, h = burn(rnd, 0.08, 0.3, p_out=0.15, p_stub=0.2)
             add(candle(wax, iron, cx + dx, cy, top + 0.02, h, 0.026, rnd, state), 2.2, 'stand')
     # hanging iron coronas over the nave
     for cy in (-12.5, -2.5, 7.5):
         z = 6.4
         R = 1.25
-        tube(iron, [(R * math.cos(t * math.pi / 24), cy + R * math.sin(t * math.pi / 24), z) for t in range(48)],
+        fallen = cy == -2.5          # this one's chain gave way: it lies across the north pews
+        mi, mw = iron.mark(), wax.mark()
+        # the rings have sagged out of round over the centuries
+        ph = rust.uniform(0, 6.3)
+        warp = lambda t, rr: (rr * (1 + 0.012 * math.sin(3 * t + ph)) * math.cos(t),
+                              cy + rr * (1 + 0.012 * math.sin(3 * t + ph)) * math.sin(t))
+        tube(iron, [(*warp(t * math.pi / 24, R), z + 0.014 * math.sin(2 * t * math.pi / 24 + ph)) for t in range(48)],
              0.035, 0.05, seg=6, closed=True)
-        tube(iron, [(R * 0.82 * math.cos(t * math.pi / 24), cy + R * 0.82 * math.sin(t * math.pi / 24), z + 0.12) for t in range(48)],
-             0.02, 0.02, seg=5, closed=True)
+        tube(iron, [(*warp(t * math.pi / 24, R * 0.82), z + 0.12 + 0.01 * math.sin(2 * t * math.pi / 24 + ph))
+                    for t in range(48)], 0.02, 0.02, seg=5, closed=True)
         hub = (0, cy, z + 2.2)
-        for k in range(4):
-            t = k * math.pi / 2 + math.pi / 4
-            tube(iron, [(R * math.cos(t), cy + R * math.sin(t), z), hub], 0.008, seg=4)
-        tube(iron, [hub, (0, cy, V_SPRING + V_RISE - 0.2)], 0.012, seg=4)
-        lathe(iron, 0, cy, [(0.1, z + 2.15), (0.1, z + 2.25)], seg=8)
+        if not fallen:
+            for k in range(4):
+                t = k * math.pi / 2 + math.pi / 4
+                tube(iron, [(R * math.cos(t), cy + R * math.sin(t), z), hub], 0.008, seg=4)
+            tube(iron, [hub, (0, cy, V_SPRING + V_RISE - 0.2)], 0.012, seg=4)
+            lathe(iron, 0, cy, [(0.1, z + 2.15), (0.1, z + 2.25)], seg=8)
         for k in range(10):
             t = k * math.pi / 5
             x, y = R * math.cos(t), cy + R * math.sin(t)
-            lathe(iron, x, y, [(0.055, z + 0.03), (0.055, z + 0.05), (0.02, z + 0.07)], seg=8)
+            pan(iron, x, y, z + 0.03, 0.055, rust, h=0.02)
+            if fallen:
+                if rust.random() < 0.5:                  # the rest were thrown off when it hit
+                    candle(wax, iron, x, y, z + 0.05, 0.0, 0.025, rnd, 'out', pool=0.0)
+                continue
             state, h = burn(rnd, 0.06, 0.24, p_out=0.25, p_stub=0.25)
             add(candle(wax, iron, x, y, z + 0.05, h, 0.025, rnd, state, pool=0.4), 1.8, 'corona')
+        if fallen:
+            for k in range(4):                           # its chains, slack now
+                t = k * math.pi / 2 + math.pi / 4
+                tube(iron, [(R * math.cos(t), cy + R * math.sin(t), z), (R * 0.4 * math.cos(t + 0.4), cy + R * 0.4 * math.sin(t + 0.4), z + 0.05)],
+                     0.008, seg=4)
+            iron.rotate_since(mi, (0, cy, z), (0.28, -0.2, 0.5), (-2.35, 0.25, 0.8 - z))
+            wax.rotate_since(mw, (0, cy, z), (0.28, -0.2, 0.5), (-2.35, 0.25, 0.8 - z))
+            # what is left of the chain still hangs from the vault, snapped
+            tube(iron, [(0, cy, V_SPRING + V_RISE - 0.2), (0.02, cy, 21.6), (0.05, cy + 0.02, 19.4)], 0.012, seg=4)
     # pricket stands in the aisles
     for (x, y), h in zip(((-8.6, -12.5), (8.6, -7.5), (-8.6, 2.5), (8.6, 7.5)), (0.44, 0.09, 0.27, 0.04)):
-        lathe(iron, x, y, [(0.25, 0.0), (0.25, 0.03), (0.06, 0.1), (0.025, 0.2)], seg=10)
-        cyl(iron, x, y, 0.0, 1.25, 0.022, seg=8)
-        lathe(iron, x, y, [(0.13, 1.25), (0.13, 1.28), (0.05, 1.3)], seg=12)
+        # forged pricket: tripod, a leaning twisted stem, a battered dish
+        tripod(iron, x, y, rust, hub=0.28, foot=0.26)
+        forged_stem(iron, x + rust.uniform(-0.035, 0.035), y + rust.uniform(-0.035, 0.035), 0.26, x, y, 1.245, rust,
+                    knops=(0.6,))
+        dented_lathe(iron, x, y, [(0.05, 1.243), (0.12, 1.262), (0.135, 1.279), (0.142, 1.288)], rust, dents=2,
+                     depth=0.2, sag=0.015)
         puddle(wax, x, y, 1.28, 0.1, rnd, h=0.006)
         add(candle(wax, iron, x, y, 1.285, h, 0.04, rnd), 2.4, 'pricket')
     # votive rack in the north aisle: a third of them have burnt out
@@ -901,7 +1254,7 @@ def build_candles(coll):
     for dy in (-1.0, 1.0):
         box(iron, vx - 0.25, vx + 0.4, vy + dy - 0.02, vy + dy, 0.0, 1.15)
     make_obj('Gold', gold, 'Gold', coll, smooth=40)
-    make_obj('Iron', iron, 'Iron', coll, closed=False, smooth=40)
+    make_obj('Iron', iron, 'Iron', coll, closed=False, smooth=40, uv_scale=0.6)
     make_obj('Wax', wax, 'Wax', coll, closed=False, smooth=40)
     return lights
 
@@ -937,7 +1290,10 @@ def build_lights(coll, lights):
     coll.objects.link(ob)
 
 
-def build(parts=('vaults', 'piers', 'walls', 'floor', 'windows', 'furniture', 'candles', 'lights')):
+def build(parts=('vaults', 'piers', 'walls', 'floor', 'windows', 'furniture', 'candles', 'lights', 'rubble')):
+    for v in RUIN.values():
+        if isinstance(v, list):
+            v.clear()
     coll = reset()
     if 'vaults' in parts: build_vaults(coll)
     if 'piers' in parts: build_piers(coll)
@@ -951,6 +1307,12 @@ def build(parts=('vaults', 'piers', 'walls', 'floor', 'windows', 'furniture', 'c
         build_flames(coll, lights)
     if 'lights' in parts:
         build_lights(coll, lights)
+    if 'rubble' in parts:
+        build_rubble(coll)
+    webs = bpy.data.objects.get('Webs')
+    if webs:
+        webs.hide_render = True          # cobwebs are drawn by the viewer only
+    bpy.context.scene['ruin'] = json.dumps(RUIN)
     return coll, lights
 
 

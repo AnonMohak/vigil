@@ -163,6 +163,36 @@ def save_png(name, rgb):
     return path
 
 
+def make_damage_mask():
+    """One cell per window (see build_church.dmg_rect): 1 = glass still in the lead, 0 = knocked out."""
+    import json
+    ruin = json.loads(bpy.context.scene.get('ruin', '{"windows": []}'))
+    W, H, cols, rows = 2048, 2048, 8, 5
+    cw, ch = W // cols, H // rows
+    idx, d1, d2, xs, ys, ncell = voronoi(W, H, 11, 91)
+    cnt = np.bincount(idx.ravel(), minlength=ncell).astype(np.float32) + 1e-6
+    sx = np.bincount(idx.ravel(), xs.ravel(), ncell) / cnt
+    sy = np.bincount(idx.ravel(), ys.ravel(), ncell) / cnt
+    rng = np.random.default_rng(5)
+    keep = np.ones((H, W), np.float32)
+    for w in ruin['windows']:
+        lvl = w['level']
+        if lvl <= 0:
+            continue
+        c, r = w['cell'] % cols, w['cell'] // cols
+        x0, y0 = c * cw, r * ch
+        # where it was hit: low down for the lancets (stones thrown from outside), anywhere for the others
+        ix = x0 + cw * rng.uniform(0.25, 0.75)
+        iy = y0 + ch * (rng.uniform(0.08, 0.45) if w['kind'] == 'lancet' else rng.uniform(0.15, 0.85))
+        d = np.hypot(sx - ix, (sy - iy) * 0.8) / ch
+        p = lvl * 1.9 * np.exp(-d / 0.3) + lvl * 0.25
+        holes = rng.random(ncell) < p
+        region = (slice(y0, y0 + ch), slice(x0, x0 + cw))
+        keep[region][holes[idx[region]]] = 0.0
+    rgb = np.repeat(keep[..., None], 3, axis=2)
+    return save_png('glass_damage', rgb)
+
+
 def make_glass_textures():
     cols = [design_lancet(512, 1536, 11, 2, 3, 0.71),
             design_lancet(512, 1536, 23, 2, 3, 0.71),
@@ -274,7 +304,14 @@ def glass(name, file, strength):
     nt.links.new(t.outputs[0], em.inputs['Color'])
     nt.links.new(tr.outputs[0], add.inputs[0])
     nt.links.new(em.outputs[0], add.inputs[1])
-    nt.links.new(add.outputs[0], out.inputs[0])
+    # broken panes: where the damage mask is 0 there is no glass at all, and the moonlight comes in white
+    mask = tex(nt, 'glass_damage.png', 'Non-Color', uv='Damage')
+    hole = nt.nodes.new('ShaderNodeBsdfTransparent')
+    mix = nt.nodes.new('ShaderNodeMixShader')
+    nt.links.new(mask.outputs[0], mix.inputs[0])
+    nt.links.new(hole.outputs[0], mix.inputs[1])
+    nt.links.new(add.outputs[0], mix.inputs[2])
+    nt.links.new(mix.outputs[0], out.inputs[0])
     try:
         m.surface_render_method = 'BLENDED'
     except Exception:
@@ -299,11 +336,15 @@ def setup_materials(glass_strength=2.0):
         tint=(0.38, 0.36, 0.34), rough_mul=0.75, vc=True)
     pbr('Wood', 'dark_wooden_planks_Diffuse.jpg', 'dark_wooden_planks_Rough.jpg', 'dark_wooden_planks_nor_gl.jpg',
         tint=(0.75, 0.6, 0.5), rough_mul=0.7)
-    flat('Iron', (0.035, 0.032, 0.03), rough=0.55, metallic=1.0)
+    pbr('Iron', 'rust_coarse_01_Diffuse.jpg', 'rust_coarse_01_Rough.jpg', 'rust_coarse_01_nor_gl.jpg',
+        tint=(0.45, 0.4, 0.38), nstr=1.3, metallic=0.3)
     flat('Gold', (0.75, 0.52, 0.2), rough=0.3, metallic=1.0)
     m = flat('Wax', (0.8, 0.72, 0.56), rough=0.45)
     vertex_tint(m.node_tree, next(n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED').inputs['Base Color'])
     flat('Mortar', (0.05, 0.045, 0.04), rough=0.9)
+    m = flat('Shard', (0.7, 0.7, 0.7), rough=0.12)
+    vertex_tint(m.node_tree, next(n for n in m.node_tree.nodes if n.type == 'BSDF_PRINCIPLED').inputs['Base Color'])
+    flat('Web', (0.6, 0.6, 0.6), rough=0.9)
     flat('Roof', (0.05, 0.05, 0.05), rough=0.9)
     flat('Cloth', (0.16, 0.008, 0.012), rough=0.85, sheen=0.6)
     flat('Linen', (0.62, 0.6, 0.55), rough=0.8)
@@ -399,6 +440,7 @@ if __name__ == '__main__':
     os.makedirs(TEX, exist_ok=True)
     if not os.path.exists(os.path.join(TEX, 'glass_rose.png')):
         make_glass_textures()
+    make_damage_mask()
     setup_materials()
     setup_world()
     setup_haze()
