@@ -178,9 +178,14 @@ function addGrime(m, mode) {
 const draco = new DRACOLoader(manager).setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/libs/draco/gltf/');
 const gltfLoader = new GLTFLoader(manager).setDRACOLoader(draco);
 gltfLoader.load(ASSETS + 'church.glb', (gltf) => {
+  const drop = [];
   gltf.scene.traverse((o) => {
     if (!o.isMesh) return;
     const mat = o.material.name;
+    if (mat === 'Web') {                 // older exports still carry cobwebs; they are not shown any more
+      drop.push(o);
+      return;
+    }
     if (GLASS[mat]) {
       const map = tex(`glass/${GLASS[mat]}.jpg`, true, false);
       const alphaMap = tex('glass/glass_damage.png', false, false);      // knocked-out panes, per window (uv1)
@@ -188,9 +193,6 @@ gltfLoader.load(ASSETS + 'church.glb', (gltf) => {
       o.material = new THREE.MeshBasicMaterial({ map, alphaMap, alphaTest: 0.5, color: new THREE.Color(0.75, 0.72, 0.78), fog: false, side: THREE.DoubleSide });
     } else if (mat === 'Mortar') {
       o.material = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.0015, 0.0012, 0.001) });
-    } else if (mat === 'Web') {
-      o.material = new THREE.MeshBasicMaterial({ map: webTexture(), color: new THREE.Color(0.07, 0.068, 0.065), transparent: true,
-        depthWrite: false, side: THREE.DoubleSide });
     } else {
       o.material = pbrMaterial(mat, o.name);
       o.material.vertexColors = !!o.geometry.attributes.color;
@@ -199,6 +201,10 @@ gltfLoader.load(ASSETS + 'church.glb', (gltf) => {
     o.matrixAutoUpdate = false;
     o.updateMatrix();
   });
+  for (const o of drop) {
+    o.removeFromParent();
+    o.geometry.dispose();
+  }
   scene.add(gltf.scene);
 });
 
@@ -393,48 +399,12 @@ const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
 dust.frustumCulled = false;
 scene.add(dust);
 
-// ---------------------------------------------------------------- the ruin: wind and cobwebs
+// ---------------------------------------------------------------- the ruin: wind
 // wind comes in through the broken north windows and the fallen vault, in gusts
 const wind = { gust: 0, dir: new THREE.Vector3(1, 0, -0.3).normalize() };
 function updateWind(t) {
   const g = n1(t * 0.21 + 3.0) * 0.5 + 0.5;
   wind.gust = THREE.MathUtils.smoothstep(g, 0.45, 0.95) * (0.6 + 0.4 * (n1(t * 1.3) * 0.5 + 0.5));
-}
-
-function webTexture() {
-  // strands fanning out from the corner (bottom left of the canvas) with sagging spiral threads
-  const N = 256, c = document.createElement('canvas');
-  c.width = c.height = N;
-  const g = c.getContext('2d');
-  g.strokeStyle = 'rgba(255,255,255,0.85)';
-  g.lineWidth = 1.1;
-  const spokes = 9;
-  for (let i = 0; i <= spokes; i++) {
-    const a = (i / spokes) * Math.PI / 2;
-    g.beginPath();
-    g.moveTo(0, N);
-    g.lineTo(Math.cos(a) * N * 1.05, N - Math.sin(a) * N * 1.05);
-    g.stroke();
-  }
-  g.lineWidth = 0.8;
-  for (let r = 18; r < N * 0.98; r += 13 + Math.random() * 9) {
-    g.beginPath();
-    for (let i = 0; i <= spokes; i++) {
-      const a = (i / spokes) * Math.PI / 2;
-      const sag = i > 0 && i < spokes ? 0.93 : 1;
-      const x = Math.cos(a) * r * sag, y = N - Math.sin(a) * r * sag;
-      if (i === 0) g.moveTo(x, y); else g.quadraticCurveTo(Math.cos(a - 0.08) * r * 0.9, N - Math.sin(a - 0.08) * r * 0.9, x, y);
-    }
-    g.stroke();
-  }
-  // a torn hole and some dust caught in it
-  g.globalCompositeOperation = 'destination-out';
-  g.beginPath();
-  g.arc(N * 0.55, N * 0.45, N * 0.12, 0, Math.PI * 2);
-  g.fill();
-  const t = new THREE.CanvasTexture(c);
-  t.flipY = false;
-  return t;
 }
 
 // what the ruin left behind: broken pews (no sitting), the rubble heap, and moonlight through the fallen vault

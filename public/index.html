@@ -33,7 +33,12 @@
       font-size: clamp(64px, 14vw, 132px); line-height: 1; letter-spacing: 0.02em;
       color: var(--ink); text-shadow: 0 0 28px rgba(232, 162, 74, 0.35);
     }
-    .sub { font-style: italic; color: var(--dim); font-size: clamp(17px, 2.6vw, 21px); margin: 10px 0 34px; }
+    .sub { font-style: italic; color: var(--dim); font-size: clamp(17px, 2.6vw, 21px); margin: 10px 0 14px; }
+    .vol {
+      display: inline-flex; align-items: center; gap: 8px; margin: 0 0 30px;
+      font-size: 13px; letter-spacing: .22em; text-transform: uppercase; color: var(--ember); opacity: .8;
+    }
+    .vol svg { width: 16px; height: 16px; flex: none; }
     #enter {
       font: 600 15px/1 'Cormorant Garamond', serif; letter-spacing: 0.32em; text-transform: uppercase;
       color: var(--ink); background: none; border: 1px solid rgba(233, 220, 194, 0.35);
@@ -91,6 +96,10 @@
     <div class="card">
       <h1>Vigil</h1>
       <p class="sub">A forsaken nave, after midnight. A few candles still burn.</p>
+      <p class="vol">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z" fill="currentColor"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Turn up the volume for the full experience
+      </p>
       <button id="enter" disabled>Gathering the dark…</button>
       <div class="bar"><i id="progress"></i></div>
       <div class="keys desk-only">

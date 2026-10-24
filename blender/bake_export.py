@@ -14,7 +14,7 @@ LIGHTMAPS = {
     'RoseTracery': 512, 'Cloth': 512, 'Iron': 1024, 'Linen': 256, 'Gold': 256, 'Wax': 1024, 'DoorIron': 128,
     'Rubble': 1024, 'Shards': 256,
 }
-UNLIT = ('Glass', 'EastGlass', 'RoseGlass', 'Mortar', 'Webs')
+UNLIT = ('Glass', 'EastGlass', 'RoseGlass', 'Mortar')
 FLOOR_RECT = (-9.5, 9.5, -20.0, 20.0)     # planar lightmap for the floor slabs: u along y, v along x
 LM_K = 0.5            # lightmaps store sRGB(L / (L + LM_K)); main.js decodes them
 

@@ -70,7 +70,7 @@ and a grime shader in `main.js` (damp near the floor, run-off streaks, stains, d
 The church is half abandoned: pews knocked over, broken or gone, a north-aisle vault bay fallen in with its
 rubble below, one iron corona down across the pews, a torn runner, broken stained glass (a per-window damage mask
 in `glass_damage.png`, read through the glass's second UV map, so the bake and the viewer agree), shards on the
-floor and cobwebs. The viewer adds wind gusts (flames gutter, dust blows) and a wind sound.
+floor. The viewer adds wind gusts (flames gutter, dust blows) and a wind sound.
 `ruin.json` tells the viewer which pews cannot be sat on and where the rubble and the hole are.
 
 ## Credits

@@ -873,14 +873,6 @@ def build_windows(coll):
 PEW_ROWS = [-15.6 + k * 1.0 for k in range(25)]
 
 
-def web(mb, a, b, c):
-    """A cobweb strung across a corner: a is the corner, b and c lie along its two edges."""
-    f = mb.face(mb.verts([a, b, c]))
-    uv = mb.bm.loops.layers.uv.get('UVMap') or mb.bm.loops.layers.uv.new('UVMap')
-    for l, t in zip(f.loops, ((0.0, 0.0), (1.0, 0.0), (0.0, 1.0))):
-        l[uv].uv = t
-
-
 def ragged_strip(mb, rnd, x0, x1, y0, y1, z0, z1, fray=0.04):
     """A worn strip of cloth with frayed sides and torn ends."""
     n = max(3, int((y1 - y0) / 0.12))
@@ -893,7 +885,7 @@ def ragged_strip(mb, rnd, x0, x1, y0, y1, z0, z1, fray=0.04):
 
 
 def build_furniture(coll):
-    wood, webs = MB(), MB()
+    wood = MB()
     rnd = random.Random(11)
     ruin = random.Random(77)
     for k, y in enumerate(PEW_ROWS):
@@ -907,7 +899,7 @@ def build_furniture(coll):
                 RUIN['broken_seats'].append(f'{k}:{s}')
             if state == 'gone':
                 continue
-            m, mw = wood.mark(), webs.mark()
+            m = wood.mark()
             gx = ruin.uniform(xa + 0.8, xb - 0.8)                  # where a broken pew gave way
             gw = ruin.uniform(0.35, 0.8)
             spans = [(xa + 0.05, gx - gw / 2), (gx + gw / 2, xb - 0.05)] if state == 'broken' else [(xa + 0.05, xb - 0.05)]
@@ -932,11 +924,8 @@ def build_furniture(coll):
             for xe in (xa, xb - 0.06):
                 prism(wood, end, 'x', xe, xe + 0.06)
             if state != 'fallen' and ruin.random() < 0.4:
-                # a cobweb in the corner between an end and the back
-                left = ruin.random() < 0.5
-                xe, d = (xa + 0.06, 1) if left else (xb - 0.06, -1)
-                web(webs, (xe, y + 0.05, 0.6), (xe + d * ruin.uniform(0.25, 0.4), y + 0.05, 0.965),
-                    (xe, y + ruin.uniform(0.3, 0.45), 0.9))
+                # the cobwebs are gone, but their dice stay so the pews keep the layout the lightmaps were baked for
+                ruin.random(), ruin.random(), ruin.random()
             if state == 'fallen':
                 # tipped over backwards onto the row behind
                 wood.rotate_since(m, ((xa + xb) / 2, y - 0.2, 0.0), (math.radians(ruin.uniform(36, 46)), 0,
@@ -944,8 +933,7 @@ def build_furniture(coll):
             yaw = ruin.uniform(-6, 6) if state in ('shifted', 'broken') else rnd.uniform(-0.7, 0.7)
             off = (ruin.uniform(-0.06, 0.06), ruin.uniform(-0.1, 0.1)) if state == 'shifted' else \
                   (rnd.uniform(-0.015, 0.015), rnd.uniform(-0.03, 0.03))
-            for mb_, mk in ((wood, m), (webs, mw)):
-                mb_.transform_since(mk, (xa + xb) / 2, y, math.radians(yaw), *off)
+            wood.transform_since(m, (xa + xb) / 2, y, math.radians(yaw), *off)
     # west doors
     door = [(-D_H, 0.0), (D_H, 0.0)] + list(reversed(arch(0.0, D_H, D_SPRING, n=16)))
     prism(wood, door, 'y', Y0 - 0.55, Y0 - 0.45)
@@ -965,26 +953,6 @@ def build_furniture(coll):
         box(iron, -D_H, D_H, Y0 - 0.45, Y0 - 0.42, z, z + 0.08)
     box(iron, -0.03, 0.03, Y0 - 0.45, Y0 - 0.4, 0.0, D_SPRING + D_H * SQ3 - 0.1)
     make_obj('DoorIron', iron, 'Iron', coll, smooth=0)
-
-    # more cobwebs: in the corners of the aisle windows, where the benches meet the wall shafts, on the candelabra
-    for _, _, yc in bays():
-        for s in (-1, 1):
-            if ruin.random() < 0.7:
-                for d in (-1, 1):
-                    x = s * (AISLE + 0.12)
-                    web(webs, (x, yc + d * AW_H, AW_SILL), (x, yc + d * (AW_H - ruin.uniform(0.25, 0.45)), AW_SILL),
-                        (x, yc + d * AW_H, AW_SILL + ruin.uniform(0.3, 0.6)))
-    for i in range(NBAY + 1):
-        for s in (-1, 1):
-            if ruin.random() < 0.5:
-                y, d = Y0 + i * BAY, ruin.choice((-1, 1))
-                x = s * (AISLE - 0.1)
-                web(webs, (x, y + d * 0.24, 0.44), (x, y + d * ruin.uniform(0.5, 0.75), 0.44),
-                    (x, y + d * 0.24, ruin.uniform(0.75, 1.0)))
-    for s in (-1, 1):
-        cx, cy = s * 1.65, 10.5
-        web(webs, (cx + s * 0.03, cy, 1.6), (cx + s * 0.4, cy, 1.6), (cx + s * 0.03, cy, 1.3))
-    make_obj('Webs', webs, 'Web', coll, closed=False, smooth=0, uv_fn=lambda bm: None)
 
     cloth = MB()
     # the runner is worn through and torn into pieces, one of them dragged askew
@@ -1309,9 +1277,6 @@ def build(parts=('vaults', 'piers', 'walls', 'floor', 'windows', 'furniture', 'c
         build_lights(coll, lights)
     if 'rubble' in parts:
         build_rubble(coll)
-    webs = bpy.data.objects.get('Webs')
-    if webs:
-        webs.hide_render = True          # cobwebs are drawn by the viewer only
     bpy.context.scene['ruin'] = json.dumps(RUIN)
     return coll, lights
 
