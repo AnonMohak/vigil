@@ -16,21 +16,27 @@ Open http://127.0.0.1:8765 and click **Enter**.
 Between the pew rows you walk on rails down the centre aisle (only the part of your view along the nave moves
 you); before the first row and past the last you walk where you look.
 
-- Desktop: W forward, S back, mouse to look, Shift to hurry, E to sit on a pew or a stone bench (E again to
-  stand), M to mute the sound.
+- Desktop: W forward, S back, mouse to look, E to sit on a pew or a stone bench (E again to stand),
+  M to mute the sound.
 - Phone: move the phone to look (gyroscope), hold the top half of the screen to walk on and the bottom half to step
   back, drag sideways to turn, tap **Sit** beside a pew or bench.
 
-## Publish on GitHub Pages
+## Publish on Cloudflare Pages
 
-`.github/workflows/pages.yml` publishes `public/` on every push to `master`. Turn it on once:
+The site is static: no build step, the output is the `public/` folder. Connect the repository once and every
+push to `master` deploys again:
 
-1. Open https://github.com/AnonMohak/vigil/settings/pages
-2. Under **Build and deployment**, set **Source** to **GitHub Actions**.
-3. Open the **Actions** tab and run **Deploy to GitHub Pages** (or push any commit to `master`).
-4. When it is green, the site is at https://anonmohak.github.io/vigil/
+1. Open https://dash.cloudflare.com → **Workers & Pages** → **Create** → **Pages** → **Connect to Git**.
+2. Pick the GitHub repository **AnonMohak/vigil** (authorise Cloudflare's GitHub app for it if asked).
+3. Set up the build:
+   - Project name: `vigil`
+   - Production branch: `master`
+   - Framework preset: **None**
+   - Build command: *(leave empty)*
+   - Build output directory: `public`
+4. Click **Save and Deploy**. The site is at https://vigil.pages.dev (or `vigil-xxx.pages.dev` if the name is taken).
 
-All asset paths are relative, so the `/vigil/` sub-path works as it is.
+Or deploy from this folder without Git: `npx wrangler login`, then `npx wrangler pages deploy public --project-name vigil`.
 
 The music is `public/assets/audio/ambient.m4a`, made from the original `bg.mp3` (since removed) with:
 
@@ -69,7 +75,7 @@ and a grime shader in `main.js` (damp near the floor, run-off streaks, stains, d
 The church is half abandoned: pews knocked over, broken or gone, a north-aisle vault bay fallen in with its
 rubble below, one iron corona down across the pews, a torn runner, broken stained glass (a per-window damage mask
 in `glass_damage.png`, read through the glass's second UV map, so the bake and the viewer agree), shards on the
-floor and cobwebs. The viewer adds wind gusts, drifting ground mist and fog banks, candle smoke and a wind sound.
+floor and cobwebs. The viewer adds wind gusts (flames gutter, dust blows) and a wind sound.
 `ruin.json` tells the viewer which pews cannot be sat on and where the rubble and the hole are.
 
 ## Credits

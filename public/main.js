@@ -98,36 +98,7 @@ function pbrMaterial(name, meshName) {
   m.lightMap = lm;
   m.lightMapIntensity = LM_INTENSITY;
   if (d.grime) addGrime(m, d.grime);
-  else m.onBeforeCompile = mistify;
   return m;
-}
-
-// ground mist: thicker near the floor, drifting with the wind; folded into three's fog
-const MIST = { time: { value: 0 }, wind: { value: new THREE.Vector2() } };
-function mistify(s) {
-  s.uniforms.uMistWind = MIST.wind;
-  s.vertexShader = s.vertexShader
-    .replace('#include <fog_pars_vertex>', '#include <fog_pars_vertex>\nvarying vec3 vMistPos;')
-    .replace('#include <fog_vertex>', '#include <fog_vertex>\nvMistPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-  s.fragmentShader = s.fragmentShader
-    .replace('#include <fog_pars_fragment>', /* glsl */`#include <fog_pars_fragment>
-      varying vec3 vMistPos;
-      uniform vec2 uMistWind;
-      float mHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-      float mNoise(vec2 p) {
-        vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-        return mix(mix(mHash(i), mHash(i + vec2(1, 0)), f.x), mix(mHash(i + vec2(0, 1)), mHash(i + vec2(1, 1)), f.x), f.y);
-      }`)
-    .replace('#include <fog_fragment>', /* glsl */`
-      #ifdef USE_FOG
-        float fogF = 1.0 - exp(-fogDensity * fogDensity * vFogDepth * vFogDepth);
-        vec2 mq = vMistPos.xz * 0.3 + uMistWind;
-        float mn = mNoise(mq) * 0.65 + mNoise(mq * 2.3 + 4.1) * 0.35;
-        float mist = exp(-max(vMistPos.y, 0.0) / 0.6) * smoothstep(0.25, 0.85, mn) * (1.0 - exp(-vFogDepth * 0.18)) * 0.42;
-        float total = clamp(fogF + mist * (1.0 - fogF), 0.0, 1.0);
-        vec3 mc = mix(fogColor, fogColor * vec3(1.15, 1.25, 1.55), clamp(mist / (total + 1e-4), 0.0, 1.0));
-        gl_FragColor.rgb = mix(gl_FragColor.rgb, mc, total);
-      #endif`);
 }
 
 // world-space grime: damp rising from the floor, run-off streaks and blotches, so no stone is clean.
@@ -199,7 +170,6 @@ function addGrime(m, mode) {
           float dn = texture2D(uGrimeTex, p.xz * 0.9 + 0.13).g;
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.36, 0.34, 0.31), up * (0.35 + 0.65 * dn) * ${dustAmt});
         }`);
-    mistify(s);
   };
   m.customProgramCacheKey = () => 'grime-' + mode;
 }
@@ -221,7 +191,6 @@ gltfLoader.load(ASSETS + 'church.glb', (gltf) => {
     } else if (mat === 'Web') {
       o.material = new THREE.MeshBasicMaterial({ map: webTexture(), color: new THREE.Color(0.07, 0.068, 0.065), transparent: true,
         depthWrite: false, side: THREE.DoubleSide });
-      o.material.onBeforeCompile = mistify;
     } else {
       o.material = pbrMaterial(mat, o.name);
       o.material.vertexColors = !!o.geometry.attributes.color;
@@ -304,7 +273,6 @@ fetch(ASSETS + 'candles.json').then((r) => r.json()).then((list) => {
     scene.add(light);
     flicker.push(light);
   }
-  setupSmoke(list);
 });
 
 // cheap smooth noise for flicker
@@ -425,16 +393,12 @@ const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
 dust.frustumCulled = false;
 scene.add(dust);
 
-// ---------------------------------------------------------------- the ruin: wind, fog banks, smoke, cobwebs
+// ---------------------------------------------------------------- the ruin: wind and cobwebs
 // wind comes in through the broken north windows and the fallen vault, in gusts
-const wind = { gust: 0, dir: new THREE.Vector3(1, 0, -0.3).normalize(), drift: new THREE.Vector2() };
-function updateWind(t, dt) {
+const wind = { gust: 0, dir: new THREE.Vector3(1, 0, -0.3).normalize() };
+function updateWind(t) {
   const g = n1(t * 0.21 + 3.0) * 0.5 + 0.5;
   wind.gust = THREE.MathUtils.smoothstep(g, 0.45, 0.95) * (0.6 + 0.4 * (n1(t * 1.3) * 0.5 + 0.5));
-  const speed = 0.05 + 0.3 * wind.gust;
-  wind.drift.x += wind.dir.x * speed * dt;
-  wind.drift.y += wind.dir.z * speed * dt;
-  MIST.wind.value.copy(wind.drift);
 }
 
 function webTexture() {
@@ -471,115 +435,6 @@ function webTexture() {
   const t = new THREE.CanvasTexture(c);
   t.flipY = false;
   return t;
-}
-
-// fog banks: big soft cards that drift with the wind and fade as you walk into them
-const fogTex = (() => {
-  const c = document.createElement('canvas');
-  c.width = 256; c.height = 128;
-  const g = c.getContext('2d');
-  for (let i = 0; i < 60; i++) {
-    const x = 30 + Math.random() * 196, y = 40 + Math.random() * 50, r = 14 + Math.random() * 34;
-    const grd = g.createRadialGradient(x, y, 0, x, y, r);
-    grd.addColorStop(0, 'rgba(255,255,255,0.11)');
-    grd.addColorStop(1, 'rgba(255,255,255,0)');
-    g.fillStyle = grd;
-    g.fillRect(0, 0, 256, 128);
-  }
-  return new THREE.CanvasTexture(c);
-})();
-const fogCardMat = new THREE.MeshBasicMaterial({
-  map: fogTex, color: new THREE.Color(0.03, 0.031, 0.04), transparent: true, depthWrite: false, fog: false,
-});
-fogCardMat.onBeforeCompile = (s) => {
-  s.vertexShader = s.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCardPos;')
-    .replace('#include <project_vertex>', '#include <project_vertex>\nvCardPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
-  s.fragmentShader = s.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCardPos;')
-    .replace('#include <opaque_fragment>', `
-      float cd = length(cameraPosition - vCardPos);
-      diffuseColor.a *= smoothstep(1.2, 5.0, cd) * (1.0 - smoothstep(26.0, 40.0, cd));
-      #include <opaque_fragment>`);
-};
-const fogCards = [];
-for (let i = 0; i < 14; i++) {
-  const w = THREE.MathUtils.randFloat(5, 9), h = THREE.MathUtils.randFloat(1.2, 2.2);
-  const card = new THREE.Mesh(new THREE.PlaneGeometry(w, h), fogCardMat);
-  card.position.copy(B(THREE.MathUtils.randFloat(-8, 8), THREE.MathUtils.randFloat(-19, 19), h * 0.3));
-  card.userData.speed = THREE.MathUtils.randFloat(0.5, 1.2);
-  card.renderOrder = 3;
-  scene.add(card);
-  fogCards.push(card);
-}
-function updateFogCards(dt) {
-  for (const c of fogCards) {
-    c.position.addScaledVector(wind.dir, (0.04 + 0.35 * wind.gust) * c.userData.speed * dt);
-    if (c.position.x > 10) c.position.x = -10;                       // wrap round the building
-    if (c.position.z < -20) c.position.z = 20;
-    if (c.position.z > 20) c.position.z = -20;
-    c.rotation.y = Math.atan2(camera.position.x - c.position.x, camera.position.z - c.position.z);
-  }
-}
-
-// smoke: thin wisps from a few candles, bent by the wind
-const SMOKE_PER = 60;
-const smoke = { emitters: [], geo: new THREE.BufferGeometry(), age: null, life: null, seed: null };
-const smokeMat = new THREE.ShaderMaterial({
-  uniforms: { uScale: { value: renderer.getPixelRatio() * innerHeight * 0.5 } },
-  vertexShader: /* glsl */`
-    attribute float aAlpha;
-    attribute float aSize;
-    varying float vAlpha;
-    uniform float uScale;
-    void main() {
-      vAlpha = aAlpha;
-      vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_PointSize = aSize * uScale / -mv.z;
-      gl_Position = projectionMatrix * mv;
-    }`,
-  fragmentShader: /* glsl */`
-    varying float vAlpha;
-    void main() {
-      float d = length(gl_PointCoord - 0.5) * 2.0;
-      float a = (1.0 - smoothstep(0.2, 1.0, d)) * vAlpha;
-      gl_FragColor = vec4(vec3(0.075, 0.07, 0.065), a);
-    }`,
-  transparent: true, depthWrite: false,
-});
-function setupSmoke(list) {
-  const pick = list.filter((c) => c.k !== 'corona').sort(() => Math.random() - 0.5).slice(0, 12);
-  smoke.emitters = pick.map((c) => new THREE.Vector3(...c.p).add(new THREE.Vector3(0, 0.07, 0)));
-  const n = smoke.emitters.length * SMOKE_PER;
-  smoke.geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(n * 3), 3));
-  smoke.geo.setAttribute('aAlpha', new THREE.BufferAttribute(new Float32Array(n), 1));
-  smoke.geo.setAttribute('aSize', new THREE.BufferAttribute(new Float32Array(n), 1));
-  smoke.life = Float32Array.from({ length: n }, () => THREE.MathUtils.randFloat(3, 5.5));
-  smoke.age = Float32Array.from({ length: n }, (_, i) => smoke.life[i] * Math.random());
-  smoke.seed = Float32Array.from({ length: n }, () => Math.random() * 100);
-  const pts = new THREE.Points(smoke.geo, smokeMat);
-  pts.frustumCulled = false;
-  pts.renderOrder = 4;
-  scene.add(pts);
-}
-function updateSmoke(t, dt) {
-  if (!smoke.age) return;
-  const pos = smoke.geo.attributes.position.array, al = smoke.geo.attributes.aAlpha.array, sz = smoke.geo.attributes.aSize.array;
-  for (let i = 0; i < smoke.age.length; i++) {
-    smoke.age[i] += dt;
-    if (smoke.age[i] > smoke.life[i]) smoke.age[i] -= smoke.life[i];
-    const a = smoke.age[i], u = a / smoke.life[i], s = smoke.seed[i];
-    const e = smoke.emitters[Math.floor(i / SMOKE_PER)];
-    const rise = 0.9 * (1 - Math.exp(-a * 0.6));
-    const curl = Math.sin(a * 1.9 + s) * 0.025 * a;
-    const push = (0.01 + 0.05 * wind.gust) * a * a;
-    pos[i * 3] = e.x + curl + wind.dir.x * push;
-    pos[i * 3 + 1] = e.y + rise;
-    pos[i * 3 + 2] = e.z + Math.cos(a * 1.6 + s) * 0.02 * a + wind.dir.z * push;
-    al[i] = Math.min(1, u * 6) * (1 - u) * 0.3;
-    sz[i] = 0.035 + 0.32 * u;
-  }
-  smoke.geo.attributes.position.needsUpdate = true;
-  smoke.geo.attributes.aAlpha.needsUpdate = true;
-  smoke.geo.attributes.aSize.needsUpdate = true;
 }
 
 // what the ruin left behind: broken pews (no sitting), the rubble heap, and moonlight through the fallen vault
@@ -870,7 +725,7 @@ function walk(dt) {
     if (keys.has('KeyS') || keys.has('ArrowDown')) f -= 1;
     f = THREE.MathUtils.clamp(f, -1, 1);
     if (f < 0) f *= 0.7;                                              // stepping back is slower
-    const speed = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 3.0 : 1.45;
+    const speed = 0.95;                       // a slow, quiet pace
     // between the pew rows you are on rails down the centre aisle (only the part of your view along the nave
     // moves you); before the first row and past the last you walk where you look
     const rails = Math.abs(player.x) < 1.0 && player.y > PEWS_Y0 && player.y < PEWS_Y1;
@@ -986,7 +841,6 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
   grade.uniforms.uAspect.value = innerWidth / innerHeight;
-  smokeMat.uniforms.uScale.value = renderer.getPixelRatio() * innerHeight * 0.5;
 });
 
 // ---------------------------------------------------------------- loop
@@ -1017,7 +871,7 @@ renderer.setAnimationLoop(() => {
     player.yaw = Math.sin(t * 0.07) * 0.08;
     player.pitch = 0.08 + Math.sin(t * 0.05) * 0.04;
   }
-  updateWind(t, dt);
+  updateWind(t);
   // flames lean away from the gusts (as seen from here) and gutter harder while they blow
   tmp.set(1, 0, 0).applyQuaternion(camera.quaternion);
   flameMat.rotation = -wind.gust * 0.4 * tmp.dot(wind.dir);
@@ -1046,8 +900,6 @@ renderer.setAnimationLoop(() => {
     if (p[i * 3 + 2] < -19.6) p[i * 3 + 2] = 19.6;
   }
   dustGeo.attributes.position.needsUpdate = true;
-  updateFogCards(dt);
-  updateSmoke(t, dt);
   if (audio) audio.wind(wind.gust);
   shaftMat.uniforms.uTime.value = t;
   grade.uniforms.uTime.value = t;
