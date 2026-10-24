@@ -1,0 +1,5 @@
+# bake intermediates and Blender saves: rebuilt by the scripts in blender/
+blender/lightmaps/
+*.blend
+*.blend1
+node_modules/

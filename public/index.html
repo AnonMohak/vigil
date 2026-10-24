@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Vigil — a gothic nave by candlelight</title>
+  <meta name="description" content="Walk through a dark gothic cathedral at night, lit by candles and moonlight through stained glass.">
+  <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,600;1,400&family=UnifrakturMaguntia&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --ink: #e9dcc2;
+      --dim: #9c8c72;
+      --ember: #e8a24a;
+      --bg: #050403;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; }
+    body { font-family: 'Cormorant Garamond', Georgia, serif; -webkit-font-smoothing: antialiased; touch-action: none; }
+    canvas { display: block; position: fixed; inset: 0; }
+
+    #veil {
+      position: fixed; inset: 0; display: grid; place-items: center; text-align: center;
+      background: radial-gradient(ellipse at 50% 60%, rgba(40, 22, 8, 0.55), rgba(3, 2, 1, 0.94) 70%);
+      transition: opacity 1.4s ease; z-index: 10; padding: 16px;
+    }
+    #veil.gone { opacity: 0; pointer-events: none; }
+    .card { max-width: 560px; }
+    h1 {
+      font-family: 'UnifrakturMaguntia', serif; font-weight: 400; margin: 0;
+      font-size: clamp(64px, 14vw, 132px); line-height: 1; letter-spacing: 0.02em;
+      color: var(--ink); text-shadow: 0 0 28px rgba(232, 162, 74, 0.35);
+    }
+    .sub { font-style: italic; color: var(--dim); font-size: clamp(17px, 2.6vw, 21px); margin: 10px 0 34px; }
+    #enter {
+      font: 600 15px/1 'Cormorant Garamond', serif; letter-spacing: 0.32em; text-transform: uppercase;
+      color: var(--ink); background: none; border: 1px solid rgba(233, 220, 194, 0.35);
+      padding: 16px 30px; cursor: pointer; transition: border-color .3s, color .3s, box-shadow .3s;
+    }
+    #enter:hover:not(:disabled), #enter:focus-visible { border-color: var(--ember); color: #fff3dc; box-shadow: 0 0 24px rgba(232,162,74,.25); outline: none; }
+    #enter:disabled { opacity: .45; cursor: progress; }
+    .bar { width: 220px; height: 1px; background: rgba(233,220,194,.15); margin: 26px auto 0; overflow: hidden; }
+    .bar i { display: block; height: 100%; width: 0; background: var(--ember); transition: width .25s; }
+    .keys { margin-top: 30px; font-size: 15px; color: var(--dim); line-height: 1.9; }
+    .keys b { font-weight: 600; color: var(--ink); }
+    .touch-only { display: none; }
+    @media (hover: none) and (pointer: coarse) { .desk-only { display: none; } .touch-only { display: block; } }
+
+    #hint {
+      position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 5;
+      font-size: 14px; letter-spacing: .18em; text-transform: uppercase; color: var(--dim);
+      opacity: 0; transition: opacity 1.2s; pointer-events: none; white-space: nowrap;
+    }
+    #hint.show { opacity: .8; }
+    .pad {
+      position: fixed; left: 0; right: 0; height: 50%; z-index: 6; pointer-events: none;
+      display: flex; justify-content: center; padding: 18px 16px; opacity: 0; transition: opacity .6s;
+      font-size: 13px; letter-spacing: .3em; text-transform: uppercase; color: var(--ink);
+    }
+    #padUp { top: 0; align-items: flex-start; background: linear-gradient(rgba(232,162,74,.10), transparent 40%); }
+    #padDown { bottom: 0; align-items: flex-end; background: linear-gradient(transparent 60%, rgba(232,162,74,.10)); }
+    .pad.show { opacity: .55; }
+    #act {
+      position: fixed; left: 50%; bottom: max(18%, 96px); transform: translate(-50%, 8px); z-index: 7;
+      font: 600 14px/1 'Cormorant Garamond', serif; letter-spacing: .28em; text-transform: uppercase;
+      color: var(--ink); background: rgba(8, 5, 3, .18); border: 1px solid rgba(233,220,194,.14);
+      padding: 13px 22px; cursor: pointer; opacity: 0; pointer-events: none;
+      transition: opacity .35s, transform .35s; -webkit-tap-highlight-color: transparent;
+    }
+    #act.show { opacity: .55; transform: translate(-50%, 0); pointer-events: auto; }
+    #act kbd {
+      font: 600 12px/1 'Cormorant Garamond', serif; letter-spacing: 0; border: 1px solid rgba(233,220,194,.4);
+      padding: 3px 6px; margin-right: 8px; border-radius: 2px;
+    }
+    .pad.on { opacity: .9; transition: opacity .15s; }
+    @media (prefers-reduced-motion: reduce) { #veil { transition: none; } }
+  </style>
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="veil">
+    <div class="card">
+      <h1>Vigil</h1>
+      <p class="sub">A gothic nave, after midnight. Candles, moonlight, stained glass.</p>
+      <button id="enter" disabled>Gathering the dark…</button>
+      <div class="bar"><i id="progress"></i></div>
+      <div class="keys desk-only">
+        <b>W</b> forward &nbsp;·&nbsp; <b>S</b> back &nbsp;·&nbsp; <b>Mouse</b> look &nbsp;·&nbsp; <b>Shift</b> hurry<br>
+        <b>E</b> sit on a pew &nbsp;·&nbsp; <b>M</b> music &nbsp;·&nbsp; <b>Esc</b> pause
+      </div>
+      <div class="keys touch-only">
+        Move your phone to look around<br>
+        Hold the <b>top</b> of the screen to walk on, the <b>bottom</b> to step back<br>
+        Drag sideways to turn &nbsp;·&nbsp; tap <b>Sit</b> near a pew
+      </div>
+    </div>
+  </div>
+  <div id="hint">Click to return</div>
+  <div class="pad" id="padUp">▲ Walk</div>
+  <div class="pad" id="padDown">Step back ▼</div>
+  <button id="act" type="button"></button>
+  <script type="module" src="./main.js"></script>
+</body>
+</html>
